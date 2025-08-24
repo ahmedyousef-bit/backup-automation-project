@@ -1,0 +1,69 @@
+trigger:
+- main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+- task: UsePythonVersion@0
+  inputs:
+    versionSpec: '3.x'
+
+- script: pip install -r requirements.txt
+  displayName: 'Install dependencies'
+
+- script: python -m unittest discover -s tests
+  displayName: 'Run Tests'
+
+- script: python app/backup.py
+  displayName: 'Run Backup Script'
+trigger:
+- main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  azureServiceConnection: 'sc-azurerm'  
+  azureResourceGroup: 'bkproj-rg'
+  azureFunctionApp: 'bk-backup-func'
+
+stages:
+- stage: Build
+  jobs:
+  - job: BuildJob
+    steps:
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: '3.x'
+
+    - script: pip install -r app/requirements.txt -t app/.python_packages/lib/site-packages
+      displayName: 'Install dependencies'
+
+    - task: ArchiveFiles@2
+      inputs:
+        rootFolderOrFile: 'app'
+        includeRootFolder: false
+        archiveFile: '$(Build.ArtifactStagingDirectory)/backup.zip'
+
+    - publish: '$(Build.ArtifactStagingDirectory)/backup.zip'
+      artifact: drop
+
+- stage: Deploy
+  dependsOn: Build
+  jobs:
+  - deployment: DeployFunc
+    environment: 'production'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - download: current
+            artifact: drop
+
+          - task: AzureFunctionApp@1
+            inputs:
+              azureSubscription: $(azureServiceConnection)
+              appType: functionAppLinux
+              appName: $(azureFunctionApp)
+              package: '$(Pipeline.Workspace)/drop/backup.zip'
